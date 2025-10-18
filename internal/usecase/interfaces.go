@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/m-molecula741/gophkeeper/internal/auth"
 	"github.com/m-molecula741/gophkeeper/internal/domain"
 )
 
@@ -27,4 +28,9 @@ type SecretRepository interface {
 	GetByID(ctx context.Context, id, userID string) (*domain.Secret, error)
 	Update(ctx context.Context, secret *domain.Secret) error
 	Delete(ctx context.Context, id, userID string) error
+}
+
+type AuthJWTManager interface {
+	GenerateToken(userID string) (string, error)
+	VerifyToken(tokenStr string) (*auth.UserClaims, error)
 }

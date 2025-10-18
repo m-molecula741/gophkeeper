@@ -1,8 +1,3 @@
-# config.yaml
-
-logging:
-  level: "info"  # debug, info, warn, error, fatal
-
 server:
   host: "0.0.0.0"
   port: 8080
@@ -13,7 +8,7 @@ server:
 database:
   # Поддерживаемые драйверы: "postgres", "sqlite3"
   driver: "postgres"
-  dsn: "host=localhost port=5432 user=gophkeeper password=secret dbname=gophkeeper sslmode=disable"
+  dsn: "host=localhost port=5432 user=postgres password=741852963 dbname=gophkeeper sslmode=disable"
 
 auth:
   jwt_secret: "your-super-secret-jwt-key-change-in-production"
