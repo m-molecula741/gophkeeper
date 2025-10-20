@@ -15,7 +15,9 @@ import (
 
 	"github.com/m-molecula741/gophkeeper/internal/auth"
 	"github.com/m-molecula741/gophkeeper/internal/config"
+	"github.com/m-molecula741/gophkeeper/internal/crypto"
 	"github.com/m-molecula741/gophkeeper/internal/delivery/api"
+	"github.com/m-molecula741/gophkeeper/internal/delivery/middleware"
 	"github.com/m-molecula741/gophkeeper/internal/repository/postgres"
 	"github.com/m-molecula741/gophkeeper/internal/usecase"
 	"github.com/m-molecula741/gophkeeper/pkg/logger"
@@ -51,20 +53,48 @@ func main() {
 
 	// Репозитории
 	userRepo := postgres.NewUserRepository(pgClient)
+	secretRepo := postgres.NewSecretRepository(pgClient)
 
 	// JWT менеджер
 	jwtManager := auth.NewJWTManager(cfg.Auth.JWTSecret, cfg.Auth.TokenTTL)
 
-	// Use case
+	// Encryption (используем JWT secret как encryption key - в продакшене лучше отдельный ключ)
+	encryptionKey := []byte(cfg.Auth.JWTSecret)
+	if len(encryptionKey) != 32 {
+		// Дополняем или обрезаем до 32 байт для AES-256
+		key := make([]byte, 32)
+		copy(key, encryptionKey)
+		encryptionKey = key
+	}
+	encryptor, err := crypto.NewAESCipher(encryptionKey)
+	if err != nil {
+		log.Fatalf("❌ Failed to create encryptor: %v", err)
+	}
+
+	// Use cases
 	authUsecase := usecase.NewAuthUsecase(userRepo, jwtManager, logr)
+	secretUsecase := usecase.NewSecretUsecase(secretRepo, encryptor, logr)
 
 	// HTTP хендлеры
 	authHandler := api.NewAuthHandler(authUsecase, logr)
+	secretHandler := api.NewSecretHandler(secretUsecase, logr)
 
-	// Роутер (можно использовать net/http или Gin/Echo)
+	// Middleware
+	authMiddleware := middleware.AuthMiddleware(jwtManager)
+
+	// Роутер
 	mux := http.NewServeMux()
+
+	// Публичные роуты (без авторизации)
 	mux.HandleFunc("POST /api/v1/register", authHandler.Register)
 	mux.HandleFunc("POST /api/v1/login", authHandler.Login)
+
+	// Защищенные роуты (требуют авторизации)
+	mux.Handle("POST /api/v1/secrets", authMiddleware(http.HandlerFunc(secretHandler.CreateSecret)))
+	mux.Handle("GET /api/v1/secrets", authMiddleware(http.HandlerFunc(secretHandler.GetAllSecrets)))
+	mux.Handle("GET /api/v1/secrets/{id}", authMiddleware(http.HandlerFunc(secretHandler.GetSecret)))
+	mux.Handle("PUT /api/v1/secrets/{id}", authMiddleware(http.HandlerFunc(secretHandler.UpdateSecret)))
+	mux.Handle("DELETE /api/v1/secrets/{id}", authMiddleware(http.HandlerFunc(secretHandler.DeleteSecret)))
 
 	server := &http.Server{
 		Addr:    cfg.Server.Host + ":" + strconv.Itoa(cfg.Server.Port),

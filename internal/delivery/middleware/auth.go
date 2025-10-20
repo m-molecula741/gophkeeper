@@ -51,3 +51,8 @@ func GetUserID(ctx context.Context) (string, error) {
 	}
 	return userID, nil
 }
+
+// GetUserIDKey возвращает ключ для userID в контексте (для тестов)
+func GetUserIDKey() interface{} {
+	return userIDKey{}
+}
