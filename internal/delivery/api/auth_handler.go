@@ -33,19 +33,28 @@ type tokenResponse struct {
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.logger.Error("failed to decode request", zap.Error(err))
+		h.logger.Debug("failed to decode request", zap.Error(err))
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
 
 	if err := h.authUsecase.Register(r.Context(), req.Email, req.Password); err != nil {
+		// Бизнес-ошибки (не системные)
 		if errors.Is(err, usecase.ErrUserExists) {
-			h.logger.Error("user already exists", zap.Error(err))
 			http.Error(w, "user already exists", http.StatusConflict)
-		} else {
-			h.logger.Error("internal error", zap.Error(err))
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
 		}
+		// Ошибки валидации
+		if errors.Is(err, usecase.ErrEmptyEmail) ||
+			errors.Is(err, usecase.ErrInvalidEmail) ||
+			errors.Is(err, usecase.ErrEmptyPassword) ||
+			errors.Is(err, usecase.ErrWeakPassword) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		// Системные ошибки
+		h.logger.Error("internal error during registration", zap.Error(err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
@@ -55,20 +64,29 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.logger.Error("failed to decode request", zap.Error(err))
+		h.logger.Debug("failed to decode request", zap.Error(err))
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
 
 	token, err := h.authUsecase.Login(r.Context(), req.Email, req.Password)
 	if err != nil {
+		// Неправильные credentials (бизнес-логика)
 		if errors.Is(err, usecase.ErrInvalidCredentials) {
-			h.logger.Error("invalid credentials", zap.Error(err))
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
-		} else {
-			h.logger.Error("internal error", zap.Error(err))
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
 		}
+		// Ошибки валидации
+		if errors.Is(err, usecase.ErrEmptyEmail) ||
+			errors.Is(err, usecase.ErrInvalidEmail) ||
+			errors.Is(err, usecase.ErrEmptyPassword) ||
+			errors.Is(err, usecase.ErrWeakPassword) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		// Системные ошибки (например, JWT generation failed)
+		h.logger.Error("internal error during login", zap.Error(err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 

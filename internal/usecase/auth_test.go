@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/m-molecula741/gophkeeper/internal/auth"
@@ -61,113 +62,258 @@ func newTestLogger() *zap.Logger {
 	return logger
 }
 
-func TestAuthUsecase_Register_Success(t *testing.T) {
-	mockRepo := new(MockUserRepository)
-	mockJWT := new(MockJWTManager)
-	logger := newTestLogger()
-	usecase := NewAuthUsecase(mockRepo, mockJWT, logger)
-
-	email := "test@example.com"
-	password := "securepassword"
-
-	// GetByEmail возвращает ошибку — пользователя нет
-	mockRepo.On("GetByEmail", mock.Anything, email).Return((*domain.User)(nil), ErrUserNotFound)
-	// Create вызывается успешно
-	mockRepo.On("Create", mock.Anything, mock.MatchedBy(func(u *domain.User) bool {
-		return u.Email == email && len(u.PasswordHash) > 0
-	})).Return(nil)
-
-	err := usecase.Register(context.Background(), email, password)
-
-	assert.NoError(t, err)
-	mockRepo.AssertExpectations(t)
-}
-
-func TestAuthUsecase_Register_UserExists(t *testing.T) {
-	mockRepo := new(MockUserRepository)
-	mockJWT := new(MockJWTManager)
-	logger := newTestLogger()
-	usecase := NewAuthUsecase(mockRepo, mockJWT, logger)
-
-	email := "existing@example.com"
-	password := "password"
-
-	// Пользователь уже существует
-	existingUser := &domain.User{ID: "123", Email: email}
-	mockRepo.On("GetByEmail", mock.Anything, email).Return(existingUser, nil)
-
-	err := usecase.Register(context.Background(), email, password)
-
-	assert.ErrorIs(t, err, ErrUserExists)
-	mockRepo.AssertExpectations(t)
-}
-
-func TestAuthUsecase_Login_Success(t *testing.T) {
-	mockRepo := new(MockUserRepository)
-	mockJWT := new(MockJWTManager)
-	logger := newTestLogger()
-	usecase := NewAuthUsecase(mockRepo, mockJWT, logger)
-
-	email := "user@example.com"
-	password := "mypassword"
-	userID := "user-123"
-	hashedPassword, _ := auth.HashPassword(password)
-	token := "fake.jwt.token"
-
-	user := &domain.User{
-		ID:           userID,
-		Email:        email,
-		PasswordHash: hashedPassword,
+func TestAuthUsecase_Register(t *testing.T) {
+	tests := []struct {
+		name          string
+		email         string
+		password      string
+		setupMocks    func(*MockUserRepository, *MockJWTManager)
+		expectedError error
+	}{
+		{
+			name:     "успешная регистрация",
+			email:    "test@example.com",
+			password: "securepassword123",
+			setupMocks: func(repo *MockUserRepository, jwt *MockJWTManager) {
+				// Пользователь не найден (еще не существует)
+				repo.On("GetByEmail", mock.Anything, "test@example.com").Return((*domain.User)(nil), ErrUserNotFound)
+				// Create выполняется успешно
+				repo.On("Create", mock.Anything, mock.MatchedBy(func(u *domain.User) bool {
+					return u.Email == "test@example.com" && len(u.PasswordHash) > 0 && u.ID != ""
+				})).Return(nil)
+			},
+			expectedError: nil,
+		},
+		{
+			name:     "пользователь уже существует",
+			email:    "existing@example.com",
+			password: "password123",
+			setupMocks: func(repo *MockUserRepository, jwt *MockJWTManager) {
+				// Пользователь уже существует
+				existingUser := &domain.User{ID: "123", Email: "existing@example.com"}
+				repo.On("GetByEmail", mock.Anything, "existing@example.com").Return(existingUser, nil)
+			},
+			expectedError: ErrUserExists,
+		},
+		{
+			name:     "пустой email",
+			email:    "",
+			password: "password123",
+			setupMocks: func(repo *MockUserRepository, jwt *MockJWTManager) {
+				// Моки не нужны - валидация произойдет раньше
+			},
+			expectedError: ErrEmptyEmail,
+		},
+		{
+			name:     "невалидный email",
+			email:    "invalid-email",
+			password: "password123",
+			setupMocks: func(repo *MockUserRepository, jwt *MockJWTManager) {
+				// Моки не нужны - валидация произойдет раньше
+			},
+			expectedError: ErrInvalidEmail,
+		},
+		{
+			name:     "пустой пароль",
+			email:    "test@example.com",
+			password: "",
+			setupMocks: func(repo *MockUserRepository, jwt *MockJWTManager) {
+				// Моки не нужны - валидация произойдет раньше
+			},
+			expectedError: ErrEmptyPassword,
+		},
+		{
+			name:     "слишком короткий пароль",
+			email:    "test@example.com",
+			password: "12345",
+			setupMocks: func(repo *MockUserRepository, jwt *MockJWTManager) {
+				// Моки не нужны - валидация произойдет раньше
+			},
+			expectedError: ErrWeakPassword,
+		},
+		{
+			name:     "ошибка при создании пользователя",
+			email:    "test@example.com",
+			password: "password123",
+			setupMocks: func(repo *MockUserRepository, jwt *MockJWTManager) {
+				repo.On("GetByEmail", mock.Anything, "test@example.com").Return((*domain.User)(nil), ErrUserNotFound)
+				repo.On("Create", mock.Anything, mock.Anything).Return(errors.New("database error"))
+			},
+			expectedError: errors.New("database error"),
+		},
 	}
 
-	mockRepo.On("GetByEmail", mock.Anything, email).Return(user, nil)
-	mockJWT.On("GenerateToken", userID).Return(token, nil)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			mockRepo := new(MockUserRepository)
+			mockJWT := new(MockJWTManager)
+			logger := newTestLogger()
 
-	resultToken, err := usecase.Login(context.Background(), email, password)
+			tt.setupMocks(mockRepo, mockJWT)
 
-	assert.NoError(t, err)
-	assert.Equal(t, token, resultToken)
-	mockRepo.AssertExpectations(t)
-	mockJWT.AssertExpectations(t)
+			usecase := NewAuthUsecase(mockRepo, mockJWT, logger)
+
+			// Act
+			err := usecase.Register(context.Background(), tt.email, tt.password)
+
+			// Assert
+			if tt.expectedError != nil {
+				assert.Error(t, err)
+				if errors.Is(tt.expectedError, ErrUserExists) ||
+					errors.Is(tt.expectedError, ErrEmptyEmail) ||
+					errors.Is(tt.expectedError, ErrInvalidEmail) ||
+					errors.Is(tt.expectedError, ErrEmptyPassword) ||
+					errors.Is(tt.expectedError, ErrWeakPassword) {
+					assert.ErrorIs(t, err, tt.expectedError)
+				} else {
+					assert.EqualError(t, err, tt.expectedError.Error())
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+
+			mockRepo.AssertExpectations(t)
+			mockJWT.AssertExpectations(t)
+		})
+	}
 }
 
-func TestAuthUsecase_Login_UserNotFound(t *testing.T) {
-	mockRepo := new(MockUserRepository)
-	mockJWT := new(MockJWTManager)
-	logger := newTestLogger()
-	usecase := NewAuthUsecase(mockRepo, mockJWT, logger)
+func TestAuthUsecase_Login(t *testing.T) {
+	// Подготовка: хешируем пароль для тестов
+	validPassword := "mypassword123"
+	validHash, _ := auth.HashPassword(validPassword)
 
-	email := "notfound@example.com"
-	password := "any"
-
-	mockRepo.On("GetByEmail", mock.Anything, email).Return((*domain.User)(nil), ErrUserNotFound)
-
-	_, err := usecase.Login(context.Background(), email, password)
-
-	assert.ErrorIs(t, err, ErrInvalidCredentials)
-	mockRepo.AssertExpectations(t)
-}
-
-func TestAuthUsecase_Login_WrongPassword(t *testing.T) {
-	mockRepo := new(MockUserRepository)
-	mockJWT := new(MockJWTManager)
-	logger := newTestLogger()
-	usecase := NewAuthUsecase(mockRepo, mockJWT, logger)
-
-	email := "user@example.com"
-	wrongPassword := "wrong"
-	correctHash, _ := auth.HashPassword("correct")
-
-	user := &domain.User{
-		ID:           "123",
-		Email:        email,
-		PasswordHash: correctHash,
+	tests := []struct {
+		name          string
+		email         string
+		password      string
+		setupMocks    func(*MockUserRepository, *MockJWTManager)
+		expectedToken string
+		expectedError error
+	}{
+		{
+			name:     "успешный логин",
+			email:    "user@example.com",
+			password: validPassword,
+			setupMocks: func(repo *MockUserRepository, jwt *MockJWTManager) {
+				user := &domain.User{
+					ID:           "user-123",
+					Email:        "user@example.com",
+					PasswordHash: validHash,
+				}
+				repo.On("GetByEmail", mock.Anything, "user@example.com").Return(user, nil)
+				jwt.On("GenerateToken", "user-123").Return("fake.jwt.token", nil)
+			},
+			expectedToken: "fake.jwt.token",
+			expectedError: nil,
+		},
+		{
+			name:     "пользователь не найден",
+			email:    "notfound@example.com",
+			password: "anypassword",
+			setupMocks: func(repo *MockUserRepository, jwt *MockJWTManager) {
+				repo.On("GetByEmail", mock.Anything, "notfound@example.com").Return((*domain.User)(nil), ErrUserNotFound)
+			},
+			expectedToken: "",
+			expectedError: ErrInvalidCredentials,
+		},
+		{
+			name:     "неправильный пароль",
+			email:    "user@example.com",
+			password: "wrongpassword",
+			setupMocks: func(repo *MockUserRepository, jwt *MockJWTManager) {
+				user := &domain.User{
+					ID:           "user-123",
+					Email:        "user@example.com",
+					PasswordHash: validHash,
+				}
+				repo.On("GetByEmail", mock.Anything, "user@example.com").Return(user, nil)
+			},
+			expectedToken: "",
+			expectedError: ErrInvalidCredentials,
+		},
+		{
+			name:     "пустой email",
+			email:    "",
+			password: "password123",
+			setupMocks: func(repo *MockUserRepository, jwt *MockJWTManager) {
+				// Моки не нужны - валидация произойдет раньше
+			},
+			expectedToken: "",
+			expectedError: ErrEmptyEmail,
+		},
+		{
+			name:     "невалидный email",
+			email:    "invalid-email",
+			password: "password123",
+			setupMocks: func(repo *MockUserRepository, jwt *MockJWTManager) {
+				// Моки не нужны - валидация произойдет раньше
+			},
+			expectedToken: "",
+			expectedError: ErrInvalidEmail,
+		},
+		{
+			name:     "пустой пароль",
+			email:    "user@example.com",
+			password: "",
+			setupMocks: func(repo *MockUserRepository, jwt *MockJWTManager) {
+				// Моки не нужны - валидация произойдет раньше
+			},
+			expectedToken: "",
+			expectedError: ErrEmptyPassword,
+		},
+		{
+			name:     "ошибка генерации токена",
+			email:    "user@example.com",
+			password: validPassword,
+			setupMocks: func(repo *MockUserRepository, jwt *MockJWTManager) {
+				user := &domain.User{
+					ID:           "user-123",
+					Email:        "user@example.com",
+					PasswordHash: validHash,
+				}
+				repo.On("GetByEmail", mock.Anything, "user@example.com").Return(user, nil)
+				jwt.On("GenerateToken", "user-123").Return("", errors.New("jwt generation failed"))
+			},
+			expectedToken: "",
+			expectedError: errors.New("jwt generation failed"),
+		},
 	}
 
-	mockRepo.On("GetByEmail", mock.Anything, email).Return(user, nil)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			mockRepo := new(MockUserRepository)
+			mockJWT := new(MockJWTManager)
+			logger := newTestLogger()
 
-	_, err := usecase.Login(context.Background(), email, wrongPassword)
+			tt.setupMocks(mockRepo, mockJWT)
 
-	assert.ErrorIs(t, err, ErrInvalidCredentials)
-	mockRepo.AssertExpectations(t)
+			usecase := NewAuthUsecase(mockRepo, mockJWT, logger)
+
+			// Act
+			token, err := usecase.Login(context.Background(), tt.email, tt.password)
+
+			// Assert
+			if tt.expectedError != nil {
+				assert.Error(t, err)
+				if errors.Is(tt.expectedError, ErrInvalidCredentials) ||
+					errors.Is(tt.expectedError, ErrEmptyEmail) ||
+					errors.Is(tt.expectedError, ErrInvalidEmail) ||
+					errors.Is(tt.expectedError, ErrEmptyPassword) {
+					assert.ErrorIs(t, err, tt.expectedError)
+				} else {
+					assert.EqualError(t, err, tt.expectedError.Error())
+				}
+				assert.Empty(t, token)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectedToken, token)
+			}
+
+			mockRepo.AssertExpectations(t)
+			mockJWT.AssertExpectations(t)
+		})
+	}
 }

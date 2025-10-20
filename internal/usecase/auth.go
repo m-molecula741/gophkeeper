@@ -31,9 +31,18 @@ func NewAuthUsecase(userRepo UserRepository, jwtManager AuthJWTManager, logger *
 }
 
 func (u *AuthUsecase) Register(ctx context.Context, email, password string) error {
+	// Валидация входных данных
+	if err := ValidateEmail(email); err != nil {
+		return err
+	}
+	if err := ValidatePassword(password); err != nil {
+		return err
+	}
+
+	// Проверка существования пользователя
 	_, err := u.userRepo.GetByEmail(ctx, email)
 	if err == nil {
-		u.logger.Error("failed to get user by email", zap.Error(err))
+		// Пользователь уже существует - это нормальная бизнес-логика, не ошибка системы
 		return ErrUserExists
 	}
 
@@ -52,18 +61,34 @@ func (u *AuthUsecase) Register(ctx context.Context, email, password string) erro
 		CreatedAt:    time.Now(),
 	}
 
-	return u.userRepo.Create(ctx, user)
+	if err := u.userRepo.Create(ctx, user); err != nil {
+		u.logger.Error("failed to create user", zap.Error(err), zap.String("email", email))
+		return err
+	}
+
+	u.logger.Info("user registered successfully", zap.String("email", email), zap.String("user_id", userID))
+	return nil
 }
 
 func (u *AuthUsecase) Login(ctx context.Context, email, password string) (string, error) {
+	// Валидация входных данных
+	if err := ValidateEmail(email); err != nil {
+		return "", err
+	}
+	if err := ValidatePassword(password); err != nil {
+		return "", err
+	}
+
 	user, err := u.userRepo.GetByEmail(ctx, email)
 	if err != nil {
-		u.logger.Error("failed to get user by email", zap.Error(err))
+		// Не логируем как ошибку - это может быть просто неправильный email
+		u.logger.Debug("user not found", zap.String("email", email))
 		return "", ErrInvalidCredentials
 	}
 
 	if err := auth.CheckPassword(password, user.PasswordHash); err != nil {
-		u.logger.Error("failed to check password", zap.Error(err))
+		// Неправильный пароль - это нормальная ситуация, не системная ошибка
+		u.logger.Debug("invalid password attempt", zap.String("email", email))
 		return "", ErrInvalidCredentials
 	}
 
@@ -73,6 +98,7 @@ func (u *AuthUsecase) Login(ctx context.Context, email, password string) (string
 		return "", err
 	}
 
+	u.logger.Info("user logged in successfully", zap.String("email", email), zap.String("user_id", user.ID))
 	return token, nil
 }
 
