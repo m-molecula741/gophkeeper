@@ -1,0 +1,18 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  tls_enabled: false
+  cert_file: ""
+  key_file: ""
+
+database:
+  # Поддерживаемые драйверы: "postgres", "sqlite3"
+  driver: "postgres"
+  dsn: "host=localhost port=5432 user=postgres password=741852963 dbname=gophkeeper sslmode=disable"
+
+auth:
+  jwt_secret: "your-super-secret-jwt-key-change-in-production"
+  token_ttl: 24h  # Время жизни access-токена
+
+logging:
+  level: "info"  # debug, info, warn, error
