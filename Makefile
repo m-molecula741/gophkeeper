@@ -55,10 +55,16 @@ build: ## Собрать бинарник сервера
 	go build -o bin/server cmd/server/main.go
 	@echo "$(GREEN)Бинарник сохранен в bin/server$(RESET)"
 
-build-client: ## Собрать бинарник клиента (когда будет реализован)
+build-client: ## Собрать бинарник клиента
 	@echo "$(GREEN)Сборка клиента...$(RESET)"
-	go build -o bin/client cmd/client/main.go
-	@echo "$(GREEN)Бинарник сохранен в bin/client$(RESET)"
+	go build -ldflags="-X 'main.version=$(shell git describe --tags --always --dirty)' -X 'main.buildDate=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)'" -o bin/gophkeeper cmd/client/main.go
+	@echo "$(GREEN)Бинарник сохранен в bin/gophkeeper$(RESET)"
+
+build-all: ## Собрать сервер и клиент
+	@echo "$(GREEN)Сборка всех компонентов...$(RESET)"
+	@$(MAKE) build
+	@$(MAKE) build-client
+	@echo "$(GREEN)Сборка завершена!$(RESET)"
 
 clean: ## Очистить временные файлы
 	@echo "$(GREEN)Очистка...$(RESET)"
